@@ -5,28 +5,46 @@ import {
   ArrowDownToLine, ArrowRight, ArrowRightLeft, ArrowUpFromLine, Barcode, Boxes,
   Camera, CheckCircle2, ClipboardCheck, Edit3, Info, LayoutDashboard, LogOut,
   MapPin, Menu, Package, Plus, Printer, RefreshCcw, ScanLine, Search,
-  ShieldCheck, Tag, Warehouse, X
+  ShieldCheck, Tag, Users, Warehouse, X, Building2
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { configurado, supabase } from './lib/supabase'
-import type { Armazem, Localizacao, Produto, ProdutoFormulario } from './lib/types'
+import { papeis, podeEditarCatalogo } from './lib/permissoes'
+import type { Armazem, ArmazemAcesso, ConviteRecebido, Localizacao, Papel, Produto, ProdutoFormulario } from './lib/types'
 import BarcodeScanner from './components/BarcodeScanner'
 import Etiqueta from './components/Etiqueta'
+import Equipa, { ConvitesRecebidos } from './components/Equipa'
+import Administracao from './components/Administracao'
 
-type Pagina = 'inicio' | 'produtos' | 'localizacoes' | 'leitor' | 'stock' | 'inventarios'
+type Pagina = 'inicio' | 'produtos' | 'localizacoes' | 'leitor' | 'equipa' | 'admin' | 'stock' | 'inventarios'
 type Selecionada = { codigo: string; nome: string; categoria: 'Produto' | 'Localização' }
+type Acessos = { acessos: ArmazemAcesso[]; convites: ConviteRecebido[]; adminGeral: boolean; existeAdmin: boolean }
 
-const menu: { id: Pagina; texto: string; icon: LucideIcon; fase?: boolean }[] = [
+const menu: { id: Pagina; texto: string; icon: LucideIcon; fase?: boolean; soAdminGeral?: boolean }[] = [
   { id: 'inicio', texto: 'Painel inicial', icon: LayoutDashboard },
   { id: 'produtos', texto: 'Produtos', icon: Package },
   { id: 'localizacoes', texto: 'Localizações', icon: MapPin },
   { id: 'leitor', texto: 'Ler códigos', icon: ScanLine },
+  { id: 'equipa', texto: 'Utilizadores', icon: Users },
+  { id: 'admin', texto: 'Armazéns', icon: Building2, soAdminGeral: true },
   { id: 'stock', texto: 'Entradas e saídas', icon: ArrowRightLeft, fase: true },
   { id: 'inventarios', texto: 'Inventários', icon: ClipboardCheck, fase: true }
 ]
 
 const formularioVazio: ProdutoFormulario = {
   nome: '', descricao: '', unidade: 'un', stock_minimo: 0, ativo: true
+}
+
+// Último armazém aberto, por utilizador. Pode não existir (modo privado, dados limpos).
+const chaveArmazem = (utilizadorId: string) => `armazem-ativo:${utilizadorId}`
+function lerArmazemGuardado(utilizadorId: string) {
+  try { return localStorage.getItem(chaveArmazem(utilizadorId)) } catch { return null }
+}
+function guardarArmazemAtivo(utilizadorId: string, armazemId: string) {
+  try { localStorage.setItem(chaveArmazem(utilizadorId), armazemId) } catch { /* sem armazenamento local */ }
+}
+function escolherArmazem(acessos: ArmazemAcesso[], preferido: string | null) {
+  return (acessos.find(a => a.id === preferido) ?? acessos[0])?.id ?? null
 }
 
 function TextoConfiguracao() {
@@ -159,7 +177,11 @@ function Painel({ produtos, localizacoes, navegar }: { produtos: Produto[]; loca
 function Dashboard({ session }: { session: Session }) {
   const [pagina, setPagina] = useState<Pagina>('inicio')
   const [mobileMenu, setMobileMenu] = useState(false)
-  const [armazem, setArmazem] = useState<Armazem | null>(null)
+  const [acessos, setAcessos] = useState<ArmazemAcesso[]>([])
+  const [armazemId, setArmazemId] = useState<string | null>(null)
+  const [convitesRecebidos, setConvitesRecebidos] = useState<ConviteRecebido[]>([])
+  const [adminGeral, setAdminGeral] = useState(false)
+  const [existeAdmin, setExisteAdmin] = useState(true)
   const [produtos, setProdutos] = useState<Produto[]>([])
   const [localizacoes, setLocalizacoes] = useState<Localizacao[]>([])
   const [carregando, setCarregando] = useState(true)
@@ -175,6 +197,10 @@ function Dashboard({ session }: { session: Session }) {
   const [codigoLido, setCodigoLido] = useState('')
   const [cameraAberta, setCameraAberta] = useState(false)
   const leitorInput = useRef<HTMLInputElement>(null)
+  const armazemAtual = useRef<string | null>(null)
+  const armazem = acessos.find(a => a.id === armazemId) ?? null
+  // Só esconde botões: quem impede a escrita é o RLS na base de dados.
+  const podeEditar = armazem ? podeEditarCatalogo(armazem.papel) : false
 
   const carregarListas = useCallback(async (id: string) => {
     if (!supabase) return
@@ -184,8 +210,39 @@ function Dashboard({ session }: { session: Session }) {
     ])
     if (p.error) throw p.error
     if (l.error) throw l.error
+    // Ignora respostas de um armazém que entretanto deixou de estar aberto.
+    if (armazemAtual.current !== id) return
     setProdutos((p.data || []) as Produto[])
     setLocalizacoes((l.data || []) as Localizacao[])
+  }, [])
+
+  const carregarAcessos = useCallback(async (): Promise<Acessos> => {
+    if (!supabase) return { acessos: [], convites: [], adminGeral: false, existeAdmin: true }
+    // O RLS só devolve os armazéns a que o utilizador tem acesso (todos, se for administrador geral).
+    const [g, e, a, m, c] = await Promise.all([
+      supabase.rpc('e_admin_geral'),
+      supabase.rpc('existe_admin_geral'),
+      supabase.from('armazens').select('id, utilizador_id, nome, criado_em'),
+      supabase.from('membros_armazem').select('armazem_id, papel').eq('utilizador_id', session.user.id),
+      supabase.rpc('meus_convites')
+    ])
+    for (const r of [g, e, a, m, c]) if (r.error) throw r.error
+    const geral = g.data === true
+    const papelPorArmazem = new Map(((m.data || []) as { armazem_id: string; papel: Papel }[]).map(x => [x.armazem_id, x.papel]))
+    const lista = ((a.data || []) as Armazem[]).flatMap(x => {
+      const papel = geral ? 'administrador' : papelPorArmazem.get(x.id)
+      return papel ? [{ ...x, papel }] : []
+    })
+    lista.sort((x, y) => x.nome.localeCompare(y.nome, 'pt-PT'))
+    return { acessos: lista, convites: (c.data || []) as ConviteRecebido[], adminGeral: geral, existeAdmin: e.data === true }
+  }, [session.user.id])
+
+  const aplicarAcessos = useCallback((dados: Acessos, preferido: string | null) => {
+    setAcessos(dados.acessos)
+    setConvitesRecebidos(dados.convites)
+    setAdminGeral(dados.adminGeral)
+    setExisteAdmin(dados.existeAdmin)
+    setArmazemId(escolherArmazem(dados.acessos, preferido))
   }, [])
 
   const inicializar = useCallback(async () => {
@@ -193,31 +250,69 @@ function Dashboard({ session }: { session: Session }) {
     setCarregando(true)
     setErro('')
     try {
-      const { data, error } = await supabase.from('armazens').select('id, utilizador_id, nome, criado_em').maybeSingle()
-      if (error) throw error
-      let armazemAtivo = data as Armazem | null
-      if (!armazemAtivo) {
-        const criado = await supabase.from('armazens').insert({ nome: 'Armazém principal' }).select('id, utilizador_id, nome, criado_em').single()
-        if (criado.error) {
-          // Evita falha na montagem dupla do React em desenvolvimento.
-          const existente = await supabase.from('armazens').select('id, utilizador_id, nome, criado_em').maybeSingle()
-          if (existente.error || !existente.data) throw criado.error
-          armazemAtivo = existente.data as Armazem
-        } else armazemAtivo = criado.data as Armazem
-      }
-      setArmazem(armazemAtivo)
-      await carregarListas(armazemAtivo.id)
+      aplicarAcessos(await carregarAcessos(), lerArmazemGuardado(session.user.id))
     } catch (e) {
       setErro(e instanceof Error ? e.message : 'Falha ao carregar o armazém.')
     } finally {
       setCarregando(false)
     }
-  }, [carregarListas])
+  }, [carregarAcessos, aplicarAcessos, session.user.id])
 
-  useEffect(() => { void inicializar() }, [inicializar, session.user.id])
+  useEffect(() => { void inicializar() }, [inicializar])
+  useEffect(() => {
+    armazemAtual.current = armazemId
+    setProdutos([]); setLocalizacoes([])
+    if (armazemId) carregarListas(armazemId).catch(e => setErro(e instanceof Error ? e.message : 'Falha ao carregar o armazém.'))
+  }, [armazemId, carregarListas])
   useEffect(() => { if (pagina === 'leitor' && !cameraAberta) leitorInput.current?.focus() }, [pagina, cameraAberta])
 
   function navegar(p: Pagina) { setPagina(p); setMobileMenu(false); setAviso(''); setErro(''); setCameraAberta(false) }
+
+  function selecionarArmazem(id: string, destino: Pagina = 'inicio') {
+    setArmazemId(id)
+    guardarArmazemAtivo(session.user.id, id)
+    setBusca(''); setEditaLocal(null); setNovaLocalizacao(''); setCodigoLido('')
+    navegar(destino)
+  }
+
+  async function recarregarAcessos(preferido = armazemId) {
+    try {
+      aplicarAcessos(await carregarAcessos(), preferido)
+    } catch (e) { setErro(e instanceof Error ? e.message : 'Falha ao carregar os armazéns.') }
+  }
+
+  async function armazemCriado(id: string) {
+    await recarregarAcessos(id)
+    selecionarArmazem(id, 'equipa')
+    setAviso('Armazém criado. Associa agora os utilizadores que vão trabalhar nele.')
+  }
+
+  async function responderConvite(convite: ConviteRecebido, aceitar: boolean) {
+    if (!supabase) return
+    setOcupado(true); setErro(''); setAviso('')
+    try {
+      const { error } = await supabase.rpc('responder_convite', { p_convite: convite.id, p_aceitar: aceitar })
+      if (error) throw error
+      aplicarAcessos(await carregarAcessos(), aceitar ? convite.armazem_id : armazemId)
+      if (aceitar) guardarArmazemAtivo(session.user.id, convite.armazem_id)
+      setAviso(aceitar ? `Agora tens acesso ao armazém «${convite.armazem_nome}» como ${papeis[convite.papel].nome}.` : 'Convite recusado.')
+    } catch (e) { setErro(e instanceof Error ? e.message : 'Não foi possível responder ao convite.') }
+    finally { setOcupado(false) }
+  }
+
+  // Configuração inicial: só resulta enquanto não existir nenhum administrador geral.
+  async function tornarMeAdminGeral() {
+    if (!supabase) return
+    setOcupado(true); setErro('')
+    try {
+      const { error } = await supabase.rpc('tornar_me_admin_geral')
+      if (error) throw error
+      await recarregarAcessos()
+      navegar('admin')
+      setAviso('Agora és administrador geral. Cria o primeiro armazém.')
+    } catch (e) { setErro(e instanceof Error ? e.message : 'Não foi possível concluir a configuração.') }
+    finally { setOcupado(false) }
+  }
 
   async function guardarProduto(form: ProdutoFormulario, id?: string) {
     if (!supabase || !armazem) return
@@ -279,9 +374,10 @@ function Dashboard({ session }: { session: Session }) {
   return <div className="app-shell">
     <aside className={`sidebar ${mobileMenu ? 'sidebar-open' : ''}`}>
       <div className="side-brand"><span className="side-brand-icon"><Warehouse size={24}/></span><div><strong>ARMAZÉM</strong><small>Gestão inteligente</small></div><button className="icon-btn mobile-only" onClick={() => setMobileMenu(false)}><X size={19}/></button></div>
+      {acessos.length > 1 && <label className="warehouse-switch"><span className="side-label">ARMAZÉM</span><select value={armazemId ?? ''} onChange={e => selecionarArmazem(e.target.value)}>{acessos.map(a => <option key={a.id} value={a.id}>{a.nome}</option>)}</select></label>}
       <div className="side-label">ESPAÇO DE TRABALHO</div>
-      <nav className="side-nav" aria-label="Navegação principal">{menu.map(item => <button key={item.id} type="button" className={`side-link ${pagina === item.id ? 'active' : ''}`} onClick={() => navegar(item.id)}><item.icon size={19}/><span>{item.texto}</span>{item.fase && <span className="phase-dot" title="Próxima fase"/>}</button>)}</nav>
-      <div className="side-bottom"><span className="side-label">CONTA</span><div className="account-chip"><span className="account-avatar">{(session.user.email || '?')[0].toUpperCase()}</span><div><strong>{session.user.email || 'Utilizador'}</strong><small>Responsável pelo armazém</small></div></div><button className="logout-btn" onClick={() => { void supabase?.auth.signOut() }}><LogOut size={17}/> Terminar sessão</button></div>
+      <nav className="side-nav" aria-label="Navegação principal">{menu.filter(item => !item.soAdminGeral || adminGeral).map(item => <button key={item.id} type="button" className={`side-link ${pagina === item.id ? 'active' : ''}`} onClick={() => navegar(item.id)}><item.icon size={19}/><span>{item.texto}</span>{item.fase && <span className="phase-dot" title="Próxima fase"/>}</button>)}</nav>
+      <div className="side-bottom"><span className="side-label">CONTA</span><div className="account-chip"><span className="account-avatar">{(session.user.email || '?')[0].toUpperCase()}</span><div><strong>{session.user.email || 'Utilizador'}</strong><small>{adminGeral ? 'Administrador geral' : armazem ? papeis[armazem.papel].nome : 'Sem armazém'}</small></div></div><button className="logout-btn" onClick={() => { void supabase?.auth.signOut() }}><LogOut size={17}/> Terminar sessão</button></div>
     </aside>
     {mobileMenu && <div className="mobile-overlay" onClick={() => setMobileMenu(false)}/>}
     <main className="main-content">
@@ -289,19 +385,26 @@ function Dashboard({ session }: { session: Session }) {
       <div className="content-container">
         {erro && <div className="feedback error global-msg"><Info size={18}/><span>{erro}</span><button aria-label="Fechar erro" onClick={() => setErro('')}><X size={16}/></button></div>}
         {aviso && <div className="feedback success global-msg"><CheckCircle2 size={18}/><span>{aviso}</span><button aria-label="Fechar aviso" onClick={() => setAviso('')}><X size={16}/></button></div>}
-        {carregando ? <div className="loading-panel">A carregar os dados do armazém…</div> : !armazem ? <div className="empty-panel"><h2>Não foi possível abrir o armazém</h2><button className="btn primary" onClick={() => { void inicializar() }}><RefreshCcw size={16}/> Tentar novamente</button></div> : <>
+        {!carregando && convitesRecebidos.length > 0 && <ConvitesRecebidos convites={convitesRecebidos} ocupado={ocupado} onResponder={(c, aceitar) => { void responderConvite(c, aceitar) }}/>}
+        {carregando ? <div className="loading-panel">A carregar os dados do armazém…</div>
+          : pagina === 'admin' && adminGeral ? <Administracao armazens={acessos} utilizadorId={session.user.id} onCriado={armazemCriado} onAbrir={selecionarArmazem}/>
+          : !armazem ? (adminGeral
+            ? <div className="empty-panel"><h2>Ainda não existem armazéns</h2><p>Cria o primeiro armazém e associa-lhe os utilizadores.</p><button className="btn primary" onClick={() => navegar('admin')}><Plus size={16}/> Criar armazém</button></div>
+            : !existeAdmin
+            ? <div className="empty-panel"><h2>Configuração inicial</h2><p>Ainda não existe nenhum administrador. Como és o primeiro, podes tornar-te administrador geral para criar armazéns e associar utilizadores.</p><button className="btn primary" disabled={ocupado} onClick={() => { void tornarMeAdminGeral() }}><ShieldCheck size={16}/> Tornar-me administrador geral</button></div>
+            : <div className="empty-panel"><h2>Ainda não tens acesso a nenhum armazém</h2><p>{convitesRecebidos.length ? 'Aceita um dos convites acima' : 'Pede a um administrador que te associe a um armazém'}. Depois, carrega em atualizar.</p><button className="btn primary" onClick={() => { void inicializar() }}><RefreshCcw size={16}/> Atualizar</button></div>) : <>
           {pagina === 'inicio' && <Painel produtos={produtos} localizacoes={localizacoes} navegar={navegar}/>}
           {pagina === 'produtos' && <>
-            <div className="page-header"><div><span className="eyebrow">CATÁLOGO</span><h1>Produtos</h1><p>Cria artigos e gera automaticamente os respetivos códigos.</p></div><button className="btn primary" onClick={() => setEdicao(null)}><Plus size={18}/> Novo produto</button></div>
+            <div className="page-header"><div><span className="eyebrow">CATÁLOGO</span><h1>Produtos</h1><p>Cria artigos e gera automaticamente os respetivos códigos.</p></div>{podeEditar ? <button className="btn primary" onClick={() => setEdicao(null)}><Plus size={18}/> Novo produto</button> : <span className="role-badge role-consulta">Só consulta</span>}</div>
             <div className="list-panel"><div className="list-toolbar"><label className="search-bar"><Search size={18}/><input placeholder="Pesquisar por nome ou código…" value={busca} onChange={e => setBusca(e.target.value)}/></label><span className="list-count">{produtosFiltrados.length} produtos</span></div>
-              {produtosFiltrados.length === 0 ? <div className="empty-state"><Package size={30}/><h3>{busca ? 'Nenhum resultado' : 'Ainda não tens produtos'}</h3><p>{busca ? 'Experimenta pesquisar por outro nome ou código.' : 'Cria o primeiro artigo e imprime a tua etiqueta.'}</p>{!busca && <button className="btn primary" onClick={() => setEdicao(null)}><Plus size={17}/> Criar produto</button>}</div> :
-                <div className="items-list">{produtosFiltrados.map(p => <article className="item-row" key={p.id}><span className="item-icon"><Package size={21}/></span><div className="item-main"><div className="item-title"><strong>{p.nome}</strong>{!p.ativo && <span className="small-badge">Inativo</span>}</div><span className="code-tag"><Barcode size={14}/>{p.codigo}</span><small>{p.unidade} · Stock mínimo de referência: {p.stock_minimo}</small></div><div className="item-actions"><button className="btn secondary" onClick={() => abrirEtiqueta(p.codigo, p.nome, 'Produto')}><Printer size={16}/><span>Etiqueta</span></button><button className="btn secondary" onClick={() => setEdicao(p)}><Edit3 size={16}/><span>Editar</span></button></div></article>)}</div>}
+              {produtosFiltrados.length === 0 ? <div className="empty-state"><Package size={30}/><h3>{busca ? 'Nenhum resultado' : 'Ainda não tens produtos'}</h3><p>{busca ? 'Experimenta pesquisar por outro nome ou código.' : 'Cria o primeiro artigo e imprime a tua etiqueta.'}</p>{!busca && podeEditar && <button className="btn primary" onClick={() => setEdicao(null)}><Plus size={17}/> Criar produto</button>}</div> :
+                <div className="items-list">{produtosFiltrados.map(p => <article className="item-row" key={p.id}><span className="item-icon"><Package size={21}/></span><div className="item-main"><div className="item-title"><strong>{p.nome}</strong>{!p.ativo && <span className="small-badge">Inativo</span>}</div><span className="code-tag"><Barcode size={14}/>{p.codigo}</span><small>{p.unidade} · Stock mínimo de referência: {p.stock_minimo}</small></div><div className="item-actions"><button className="btn secondary" onClick={() => abrirEtiqueta(p.codigo, p.nome, 'Produto')}><Printer size={16}/><span>Etiqueta</span></button>{podeEditar && <button className="btn secondary" onClick={() => setEdicao(p)}><Edit3 size={16}/><span>Editar</span></button>}</div></article>)}</div>}
             </div><p className="micro footnote">A lista apresenta até 1.000 produtos nesta versão. O stock físico só será calculado quando implementarmos os movimentos.</p>
           </>}
           {pagina === 'localizacoes' && <>
-            <div className="page-header"><div><span className="eyebrow">ORGANIZAÇÃO</span><h1>Localizações</h1><p>Cria identificadores para estantes, prateleiras, corredores ou caixas.</p></div></div>
-            <div className="location-grid"><section className="list-panel creation-panel"><h2>{editaLocal ? 'Editar localização' : 'Nova localização'}</h2><p>Exemplo: Corredor A · Estante 03 · Prateleira 02.</p><form onSubmit={guardarLocalizacao} className="form-stack"><label>Nome / descrição<input required minLength={2} maxLength={120} placeholder="Ex.: A-03-02" value={novaLocalizacao} onChange={e => setNovaLocalizacao(e.target.value)}/></label><button className="btn primary full" disabled={ocupado} type="submit">{ocupado ? 'A guardar…' : editaLocal ? 'Guardar localização' : 'Criar localização'} <Plus size={17}/></button>{editaLocal && <button className="btn ghost full" type="button" onClick={() => { setEditaLocal(null); setNovaLocalizacao('') }}>Cancelar edição</button>}</form></section>
-              <section className="list-panel"><div className="list-toolbar"><h2>Localizações criadas</h2><span className="list-count">{localizacoes.length}</span></div>{!localizacoes.length ? <div className="empty-state compact"><MapPin size={29}/><h3>Sem localizações</h3><p>Cria uma localização para começar.</p></div> : <div className="items-list">{localizacoes.map(l => <article key={l.id} className="item-row"><span className="item-icon"><MapPin size={20}/></span><div className="item-main"><strong>{l.nome}</strong><span className="code-tag"><Barcode size={14}/>{l.codigo}</span></div><div className="item-actions"><button className="btn secondary" onClick={() => abrirEtiqueta(l.codigo, l.nome, 'Localização')} title="Imprimir etiqueta"><Printer size={16}/><span>Etiqueta</span></button><button className="btn secondary" title="Editar" onClick={() => { setEditaLocal(l); setNovaLocalizacao(l.nome) }}><Edit3 size={16}/></button></div></article>)}</div>}</section></div>
+            <div className="page-header"><div><span className="eyebrow">ORGANIZAÇÃO</span><h1>Localizações</h1><p>Cria identificadores para estantes, prateleiras, corredores ou caixas.</p></div>{!podeEditar && <span className="role-badge role-consulta">Só consulta</span>}</div>
+            <div className={podeEditar ? 'location-grid' : ''}>{podeEditar && <section className="list-panel creation-panel"><h2>{editaLocal ? 'Editar localização' : 'Nova localização'}</h2><p>Exemplo: Corredor A · Estante 03 · Prateleira 02.</p><form onSubmit={guardarLocalizacao} className="form-stack"><label>Nome / descrição<input required minLength={2} maxLength={120} placeholder="Ex.: A-03-02" value={novaLocalizacao} onChange={e => setNovaLocalizacao(e.target.value)}/></label><button className="btn primary full" disabled={ocupado} type="submit">{ocupado ? 'A guardar…' : editaLocal ? 'Guardar localização' : 'Criar localização'} <Plus size={17}/></button>{editaLocal && <button className="btn ghost full" type="button" onClick={() => { setEditaLocal(null); setNovaLocalizacao('') }}>Cancelar edição</button>}</form></section>}
+              <section className="list-panel"><div className="list-toolbar"><h2>Localizações criadas</h2><span className="list-count">{localizacoes.length}</span></div>{!localizacoes.length ? <div className="empty-state compact"><MapPin size={29}/><h3>Sem localizações</h3><p>Cria uma localização para começar.</p></div> : <div className="items-list">{localizacoes.map(l => <article key={l.id} className="item-row"><span className="item-icon"><MapPin size={20}/></span><div className="item-main"><strong>{l.nome}</strong><span className="code-tag"><Barcode size={14}/>{l.codigo}</span></div><div className="item-actions"><button className="btn secondary" onClick={() => abrirEtiqueta(l.codigo, l.nome, 'Localização')} title="Imprimir etiqueta"><Printer size={16}/><span>Etiqueta</span></button>{podeEditar && <button className="btn secondary" title="Editar" onClick={() => { setEditaLocal(l); setNovaLocalizacao(l.nome) }}><Edit3 size={16}/></button>}</div></article>)}</div>}</section></div>
           </>}
           {pagina === 'leitor' && <>
             <div className="page-header"><div><span className="eyebrow">IDENTIFICAÇÃO</span><h1>Leitura de códigos</h1><p>Usa a câmara ou um leitor USB/Bluetooth configurado em modo teclado (HID).</p></div></div>
@@ -313,6 +416,7 @@ function Dashboard({ session }: { session: Session }) {
               <p className="micro scan-tip">Dica: os leitores tipo teclado normalmente introduzem o código e enviam Enter. Mantém o campo de pesquisa selecionado.</p>
             </section>
           </>}
+          {pagina === 'equipa' && <Equipa key={armazem.id} armazem={armazem} utilizadorId={session.user.id} adminGeral={adminGeral} onAlterado={() => { void recarregarAcessos() }}/>}
           {pagina === 'stock' && <>
             <div className="page-header"><div><span className="eyebrow">PRÓXIMA ETAPA</span><h1>Entradas e saídas</h1><p>As tabelas de stock e movimentos já estão preparadas na base de dados.</p></div></div><div className="future-panel"><span className="future-icon"><ArrowRightLeft size={32}/></span><h2>Movimentos na fase 2</h2><p>Vamos adicionar entradas, saídas, transferências entre localizações e histórico. Os movimentos serão executados por operações SQL transacionais, com validação de saldo e registo do utilizador.</p><div className="future-row"><span><ArrowDownToLine size={18}/> Entradas</span><span><ArrowUpFromLine size={18}/> Saídas</span><span><ArrowRightLeft size={18}/> Transferências</span></div><button className="btn secondary" onClick={() => navegar('produtos')}>Voltar aos produtos</button></div>
           </>}
