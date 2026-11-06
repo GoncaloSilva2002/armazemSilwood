@@ -3,22 +3,36 @@ import JsBarcode from 'jsbarcode'
 import { QRCodeSVG } from 'qrcode.react'
 import { Printer, X } from 'lucide-react'
 
-type Props = { codigo: string; nome: string; categoria: 'Produto' | 'Localização'; onClose: () => void }
+type Props = { codigo: string; nome: string; categoria: 'Produto' | 'Localização'; local?: string; onClose: () => void }
 
-export default function Etiqueta({ codigo, nome, categoria, onClose }: Props) {
+// Etiqueta de 80 × 47 mm pensada para impressão:
+// - QR Code grande (≈28 mm) com margem branca (quiet zone) suficiente;
+// - Code 128 com barras de largura inteira e margens laterais largas,
+//   escalado para ocupar toda a largura sem barras "borradas".
+export default function Etiqueta({ codigo, nome, categoria, local, onClose }: Props) {
   const svgRef = useRef<SVGSVGElement>(null)
   useEffect(() => {
-    if (!svgRef.current) return
-    JsBarcode(svgRef.current, codigo, {
+    const svg = svgRef.current
+    if (!svg) return
+    JsBarcode(svg, codigo, {
       format: 'CODE128',
-      displayValue: true,
-      fontSize: 13,
-      height: 42,
-      width: 1.45,
-      margin: 7,
+      displayValue: false,
+      height: 60,
+      width: 2,
+      margin: 20,
       background: '#ffffff',
-      lineColor: '#111111'
+      lineColor: '#000000'
     })
+    // Converter o tamanho fixo num viewBox para o SVG escalar com o CSS (em mm).
+    const w = svg.getAttribute('width')?.replace('px', '')
+    const h = svg.getAttribute('height')?.replace('px', '')
+    if (w && h) {
+      svg.setAttribute('viewBox', `0 0 ${w} ${h}`)
+      svg.setAttribute('preserveAspectRatio', 'none')
+      svg.removeAttribute('width')
+      svg.removeAttribute('height')
+      svg.style.removeProperty('transform')
+    }
   }, [codigo])
 
   return (
@@ -29,16 +43,20 @@ export default function Etiqueta({ codigo, nome, categoria, onClose }: Props) {
           <button className="icon-btn" aria-label="Fechar" onClick={onClose}><X size={19}/></button>
         </div>
         <div className="print-area">
-          <div className="label-content">
-            <div className="label-header"><span>ARMAZÉM</span><small>{categoria.toUpperCase()}</small></div>
-            <strong className="label-name">{nome}</strong>
-            <div className="label-graphics">
-              <svg className="barcode-svg" ref={svgRef} aria-label={`Código de barras ${codigo}`} />
-              <QRCodeSVG value={codigo} size={78} level="M" marginSize={1} title={`QR Code ${codigo}`}/>
+          <div className="label-content label-v2">
+            <div className="label-top">
+              <QRCodeSVG className="label-qr" value={codigo} size={256} level="M" marginSize={3} title={`QR Code ${codigo}`}/>
+              <div className="label-info">
+                <span className="label-cat">ARMAZÉM · {categoria.toUpperCase()}</span>
+                <strong className="label-name">{nome}</strong>
+                {local && <span className="label-local">Local: {local}</span>}
+                <span className="label-code">{codigo}</span>
+              </div>
             </div>
-            <span className="label-code">{codigo}</span>
+            <svg className="barcode-svg" ref={svgRef} aria-label={`Código de barras ${codigo}`} />
           </div>
         </div>
+        <p className="micro hide-on-print label-tip">Na janela de impressão usa <strong>escala 100%</strong> (não "Ajustar à página") e, se possível, a qualidade mais alta da impressora.</p>
         <div className="modal-actions hide-on-print">
           <button className="btn ghost" onClick={onClose}>Fechar</button>
           <button className="btn primary" onClick={() => window.print()}><Printer size={17}/> Imprimir etiqueta</button>

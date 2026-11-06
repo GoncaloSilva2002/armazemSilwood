@@ -2,22 +2,26 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import {
-  ArrowDownToLine, ArrowRight, ArrowRightLeft, ArrowUpFromLine, Barcode, Boxes,
-  Camera, CheckCircle2, ClipboardCheck, Edit3, Info, LayoutDashboard, LogOut,
+  ArrowRight, ArrowRightLeft, Barcode, Boxes,
+  Camera, CheckCircle2, ClipboardCheck, ClipboardList, Edit3, Info, LayoutDashboard, LogOut,
   MapPin, Menu, Package, Plus, Printer, RefreshCcw, ScanLine, Search,
   ShieldCheck, Tag, Users, Warehouse, X, Building2
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { configurado, supabase } from './lib/supabase'
-import { papeis, podeEditarCatalogo } from './lib/permissoes'
-import type { Armazem, ArmazemAcesso, ConviteRecebido, Localizacao, Papel, Produto, ProdutoFormulario } from './lib/types'
+import { mensagemErro } from './lib/erros'
+import { papeis, podeEditarCatalogo, podeMovimentar } from './lib/permissoes'
+import type { Armazem, ArmazemAcesso, ConviteRecebido, Localizacao, Papel, Produto, ProdutoFormulario, StockSaldo } from './lib/types'
 import BarcodeScanner from './components/BarcodeScanner'
 import Etiqueta from './components/Etiqueta'
 import Equipa, { ConvitesRecebidos } from './components/Equipa'
 import Administracao from './components/Administracao'
+import Movimentos, { qtd, totalPorProduto } from './components/Movimentos'
+import FolhaObra from './components/FolhaObra'
+import { lerCodigo } from './lib/codigos'
 
-type Pagina = 'inicio' | 'produtos' | 'localizacoes' | 'leitor' | 'equipa' | 'admin' | 'stock' | 'inventarios'
-type Selecionada = { codigo: string; nome: string; categoria: 'Produto' | 'Localização' }
+type Pagina = 'inicio' | 'produtos' | 'localizacoes' | 'leitor' | 'equipa' | 'admin' | 'stock' | 'obras' | 'inventarios'
+type Selecionada = { codigo: string; nome: string; categoria: 'Produto' | 'Localização'; local?: string }
 type Acessos = { acessos: ArmazemAcesso[]; convites: ConviteRecebido[]; adminGeral: boolean; existeAdmin: boolean }
 
 const menu: { id: Pagina; texto: string; icon: LucideIcon; fase?: boolean; soAdminGeral?: boolean }[] = [
@@ -27,12 +31,13 @@ const menu: { id: Pagina; texto: string; icon: LucideIcon; fase?: boolean; soAdm
   { id: 'leitor', texto: 'Ler códigos', icon: ScanLine },
   { id: 'equipa', texto: 'Utilizadores', icon: Users },
   { id: 'admin', texto: 'Armazéns', icon: Building2, soAdminGeral: true },
-  { id: 'stock', texto: 'Entradas e saídas', icon: ArrowRightLeft, fase: true },
+  { id: 'stock', texto: 'Entradas e saídas', icon: ArrowRightLeft },
+  { id: 'obras', texto: 'Folhas de obra', icon: ClipboardList },
   { id: 'inventarios', texto: 'Inventários', icon: ClipboardCheck, fase: true }
 ]
 
 const formularioVazio: ProdutoFormulario = {
-  nome: '', descricao: '', unidade: 'un', stock_minimo: 0, ativo: true
+  nome: '', descricao: '', unidade: 'un', stock_minimo: 0, ativo: true, localizacao_id: null
 }
 
 // Último armazém aberto, por utilizador. Pode não existir (modo privado, dados limpos).
@@ -88,7 +93,7 @@ function Autenticacao() {
         setMensagem('Conta criada. Verifica o teu email para confirmar o registo e depois inicia sessão.')
       }
     } catch (erro) {
-      setMensagem(erro instanceof Error ? erro.message : 'Não foi possível autenticar.')
+      setMensagem(mensagemErro(erro, 'Não foi possível autenticar.'))
     } finally {
       setOcupado(false)
     }
@@ -113,14 +118,15 @@ function Autenticacao() {
   )
 }
 
-function ProdutoModal({ inicial, onClose, onSave, ocupado }: {
+function ProdutoModal({ inicial, localizacoes, onClose, onSave, ocupado }: {
   inicial: Produto | null
+  localizacoes: Localizacao[]
   onClose: () => void
   onSave: (form: ProdutoFormulario, id?: string) => Promise<void>
   ocupado: boolean
 }) {
   const [form, setForm] = useState<ProdutoFormulario>(inicial
-    ? { nome: inicial.nome, descricao: inicial.descricao, unidade: inicial.unidade, stock_minimo: inicial.stock_minimo, ativo: inicial.ativo }
+    ? { nome: inicial.nome, descricao: inicial.descricao, unidade: inicial.unidade, stock_minimo: inicial.stock_minimo, ativo: inicial.ativo, localizacao_id: inicial.localizacao_id }
     : formularioVazio)
   const [erro, setErro] = useState('')
 
@@ -132,7 +138,7 @@ function ProdutoModal({ inicial, onClose, onSave, ocupado }: {
     try {
       await onSave({ ...form, nome: form.nome.trim(), descricao: form.descricao.trim() }, inicial?.id)
     } catch (e) {
-      setErro(e instanceof Error ? e.message : 'Erro ao guardar o produto.')
+      setErro(mensagemErro(e, 'Erro ao guardar o produto.'))
     }
   }
   return (
@@ -147,6 +153,7 @@ function ProdutoModal({ inicial, onClose, onSave, ocupado }: {
             <label>Unidade<select value={form.unidade} onChange={e => setForm({ ...form, unidade: e.target.value })}><option value="un">Unidade</option><option value="cx">Caixa</option><option value="kg">Quilograma</option><option value="m">Metro</option><option value="l">Litro</option></select></label>
             <label>Stock mínimo (referência)<input type="number" min="0" max="999999999" step="1" value={form.stock_minimo} onChange={e => setForm({ ...form, stock_minimo: Number(e.target.value) })}/></label>
           </div>
+          <label>Localização habitual<select value={form.localizacao_id ?? ''} onChange={e => setForm({ ...form, localizacao_id: e.target.value || null })}><option value="">{localizacoes.length ? 'Sem localização definida' : 'Ainda não existem localizações'}</option>{[...localizacoes].sort((a, b) => a.nome.localeCompare(b.nome, 'pt-PT')).map(l => <option key={l.id} value={l.id}>{l.nome} · {l.codigo}</option>)}</select><small className="field-hint">Onde o produto costuma estar arrumado. É sugerida nas entradas.</small></label>
           {inicial && <label className="checkline"><input type="checkbox" checked={form.ativo} onChange={e => setForm({ ...form, ativo: e.target.checked })}/> Produto ativo no catálogo</label>}
           {erro && <p className="feedback error">{erro}</p>}
           <div className="modal-actions"><button type="button" className="btn ghost" onClick={onClose}>Cancelar</button><button type="submit" className="btn primary" disabled={ocupado}>{ocupado ? 'A guardar…' : inicial ? 'Guardar alterações' : 'Criar produto'}</button></div>
@@ -156,26 +163,29 @@ function ProdutoModal({ inicial, onClose, onSave, ocupado }: {
   )
 }
 
-function Painel({ produtos, localizacoes, navegar }: { produtos: Produto[]; localizacoes: Localizacao[]; navegar: (pagina: Pagina) => void }) {
+function Painel({ produtos, localizacoes, saldos, navegar }: { produtos: Produto[]; localizacoes: Localizacao[]; saldos: StockSaldo[]; navegar: (pagina: Pagina) => void }) {
+  const totais = totalPorProduto(saldos)
+  const comStock = [...totais.values()].filter(v => v > 0).length
+  const abaixo = produtos.filter(p => p.ativo && p.stock_minimo > 0 && (totais.get(p.id) ?? 0) < p.stock_minimo).length
   return <>
     <div className="page-intro"><span className="eyebrow">VISÃO GERAL</span><h1>O teu armazém, organizado.</h1><p>Controla o catálogo e identifica cada artigo com um código próprio.</p></div>
     <div className="stat-grid">
       <div className="stat-card"><span><Package size={19}/> Produtos registados</span><strong>{produtos.length}</strong><small>{produtos.filter(p => p.ativo).length} ativos</small></div>
       <div className="stat-card"><span><MapPin size={19}/> Localizações</span><strong>{localizacoes.length}</strong><small>Identificadas por QR e barras</small></div>
-      <div className="stat-card muted-stat"><span><Boxes size={19}/> Quantidades</span><strong>—</strong><small>Disponível na fase de movimentos</small></div>
+      <button className="stat-card stat-link" onClick={() => navegar('stock')}><span><Boxes size={19}/> Produtos com stock</span><strong>{comStock}</strong><small>{abaixo ? `${abaixo} abaixo do stock mínimo` : 'Nenhum abaixo do mínimo'}</small></button>
     </div>
     <h2 className="section-title">Acesso rápido</h2>
     <div className="quick-grid">
       <button className="quick-card" onClick={() => navegar('produtos')}><span className="quick-icon"><Plus size={22}/></span><strong>Criar produto</strong><p>Gerar um novo código e etiqueta</p><ArrowRight size={18}/></button>
       <button className="quick-card" onClick={() => navegar('leitor')}><span className="quick-icon"><ScanLine size={22}/></span><strong>Ler um código</strong><p>Telemóvel ou leitor USB/Bluetooth</p><ArrowRight size={18}/></button>
-      <button className="quick-card" onClick={() => navegar('localizacoes')}><span className="quick-icon"><MapPin size={22}/></span><strong>Criar localização</strong><p>Identificar estantes e prateleiras</p><ArrowRight size={18}/></button>
+      <button className="quick-card" onClick={() => navegar('stock')}><span className="quick-icon"><ArrowRightLeft size={22}/></span><strong>Entradas e saídas</strong><p>Registar movimentos e ver o stock</p><ArrowRight size={18}/></button>
     </div>
-    <div className="helper-box"><Info size={20}/><p><strong>Fase 1 ativa.</strong> Já podes registar artigos, criar localizações e imprimir etiquetas. Quantidades, entradas, saídas e inventários serão implementados no módulo seguinte.</p></div>
+    <div className="helper-box"><Info size={20}/><p><strong>Fase 2 ativa.</strong> Além do catálogo e das etiquetas, já podes registar entradas, saídas e transferências entre localizações. Os inventários (contagem física) chegam na fase seguinte.</p></div>
   </>
 }
 
 function Dashboard({ session }: { session: Session }) {
-  const [pagina, setPagina] = useState<Pagina>('inicio')
+  const [pagina, setPagina] = useState<Pagina>('stock')
   const [mobileMenu, setMobileMenu] = useState(false)
   const [acessos, setAcessos] = useState<ArmazemAcesso[]>([])
   const [armazemId, setArmazemId] = useState<string | null>(null)
@@ -184,6 +194,8 @@ function Dashboard({ session }: { session: Session }) {
   const [existeAdmin, setExisteAdmin] = useState(true)
   const [produtos, setProdutos] = useState<Produto[]>([])
   const [localizacoes, setLocalizacoes] = useState<Localizacao[]>([])
+  const [saldos, setSaldos] = useState<StockSaldo[]>([])
+  const [produtoMovimentar, setProdutoMovimentar] = useState<string | null>(null)
   const [carregando, setCarregando] = useState(true)
   const [ocupado, setOcupado] = useState(false)
   const [erro, setErro] = useState('')
@@ -204,16 +216,19 @@ function Dashboard({ session }: { session: Session }) {
 
   const carregarListas = useCallback(async (id: string) => {
     if (!supabase) return
-    const [p, l] = await Promise.all([
-      supabase.from('produtos').select('id, armazem_id, codigo, nome, descricao, unidade, stock_minimo, ativo, criado_em').eq('armazem_id', id).order('criado_em', { ascending: false }).limit(1000),
-      supabase.from('localizacoes').select('id, armazem_id, codigo, nome, criado_em').eq('armazem_id', id).order('criado_em', { ascending: false }).limit(1000)
+    const [p, l, s] = await Promise.all([
+      supabase.from('produtos').select('id, armazem_id, codigo, nome, descricao, unidade, stock_minimo, ativo, localizacao_id, criado_em').eq('armazem_id', id).order('criado_em', { ascending: false }).limit(1000),
+      supabase.from('localizacoes').select('id, armazem_id, codigo, nome, criado_em').eq('armazem_id', id).order('criado_em', { ascending: false }).limit(1000),
+      supabase.from('stock_saldos').select('armazem_id, produto_id, localizacao_id, quantidade, atualizado_em').eq('armazem_id', id).gt('quantidade', 0).limit(10000)
     ])
     if (p.error) throw p.error
     if (l.error) throw l.error
+    if (s.error) throw s.error
     // Ignora respostas de um armazém que entretanto deixou de estar aberto.
     if (armazemAtual.current !== id) return
     setProdutos((p.data || []) as Produto[])
     setLocalizacoes((l.data || []) as Localizacao[])
+    setSaldos(((s.data || []) as StockSaldo[]).map(x => ({ ...x, quantidade: Number(x.quantidade) })))
   }, [])
 
   const carregarAcessos = useCallback(async (): Promise<Acessos> => {
@@ -252,7 +267,7 @@ function Dashboard({ session }: { session: Session }) {
     try {
       aplicarAcessos(await carregarAcessos(), lerArmazemGuardado(session.user.id))
     } catch (e) {
-      setErro(e instanceof Error ? e.message : 'Falha ao carregar o armazém.')
+      setErro(mensagemErro(e, 'Falha ao carregar o armazém.'))
     } finally {
       setCarregando(false)
     }
@@ -261,14 +276,14 @@ function Dashboard({ session }: { session: Session }) {
   useEffect(() => { void inicializar() }, [inicializar])
   useEffect(() => {
     armazemAtual.current = armazemId
-    setProdutos([]); setLocalizacoes([])
-    if (armazemId) carregarListas(armazemId).catch(e => setErro(e instanceof Error ? e.message : 'Falha ao carregar o armazém.'))
+    setProdutos([]); setLocalizacoes([]); setSaldos([])
+    if (armazemId) carregarListas(armazemId).catch(e => setErro(mensagemErro(e, 'Falha ao carregar o armazém.')))
   }, [armazemId, carregarListas])
   useEffect(() => { if (pagina === 'leitor' && !cameraAberta) leitorInput.current?.focus() }, [pagina, cameraAberta])
 
-  function navegar(p: Pagina) { setPagina(p); setMobileMenu(false); setAviso(''); setErro(''); setCameraAberta(false) }
+  function navegar(p: Pagina) { setPagina(p); setProdutoMovimentar(null); setMobileMenu(false); setAviso(''); setErro(''); setCameraAberta(false) }
 
-  function selecionarArmazem(id: string, destino: Pagina = 'inicio') {
+  function selecionarArmazem(id: string, destino: Pagina = 'stock') {
     setArmazemId(id)
     guardarArmazemAtivo(session.user.id, id)
     setBusca(''); setEditaLocal(null); setNovaLocalizacao(''); setCodigoLido('')
@@ -278,7 +293,7 @@ function Dashboard({ session }: { session: Session }) {
   async function recarregarAcessos(preferido = armazemId) {
     try {
       aplicarAcessos(await carregarAcessos(), preferido)
-    } catch (e) { setErro(e instanceof Error ? e.message : 'Falha ao carregar os armazéns.') }
+    } catch (e) { setErro(mensagemErro(e, 'Falha ao carregar os armazéns.')) }
   }
 
   async function armazemCriado(id: string) {
@@ -296,7 +311,7 @@ function Dashboard({ session }: { session: Session }) {
       aplicarAcessos(await carregarAcessos(), aceitar ? convite.armazem_id : armazemId)
       if (aceitar) guardarArmazemAtivo(session.user.id, convite.armazem_id)
       setAviso(aceitar ? `Agora tens acesso ao armazém «${convite.armazem_nome}» como ${papeis[convite.papel].nome}.` : 'Convite recusado.')
-    } catch (e) { setErro(e instanceof Error ? e.message : 'Não foi possível responder ao convite.') }
+    } catch (e) { setErro(mensagemErro(e, 'Não foi possível responder ao convite.')) }
     finally { setOcupado(false) }
   }
 
@@ -310,7 +325,7 @@ function Dashboard({ session }: { session: Session }) {
       await recarregarAcessos()
       navegar('admin')
       setAviso('Agora és administrador geral. Cria o primeiro armazém.')
-    } catch (e) { setErro(e instanceof Error ? e.message : 'Não foi possível concluir a configuração.') }
+    } catch (e) { setErro(mensagemErro(e, 'Não foi possível concluir a configuração.')) }
     finally { setOcupado(false) }
   }
 
@@ -326,7 +341,7 @@ function Dashboard({ session }: { session: Session }) {
       setEdicao(undefined)
       setAviso(id ? 'Produto atualizado com sucesso.' : 'Produto criado. O código de barras e o QR Code já estão disponíveis para impressão.')
     } catch (e) {
-      setErro(e instanceof Error ? e.message : 'Não foi possível guardar o produto.')
+      setErro(mensagemErro(e, 'Não foi possível guardar o produto.'))
       throw e
     } finally { setOcupado(false) }
   }
@@ -345,14 +360,19 @@ function Dashboard({ session }: { session: Session }) {
       await carregarListas(armazem.id)
       setNovaLocalizacao(''); setEditaLocal(null)
       setAviso(editaLocal ? 'Localização atualizada.' : 'Localização criada com o seu código exclusivo.')
-    } catch (e) { setErro(e instanceof Error ? e.message : 'Erro ao guardar localização.') }
+    } catch (e) { setErro(mensagemErro(e, 'Erro ao guardar localização.')) }
     finally { setOcupado(false) }
   }
 
+  const nomeLocal = useMemo(() => {
+    const mapa = new Map(localizacoes.map(l => [l.id, l.nome]))
+    return (id: string | null) => (id ? mapa.get(id) : undefined)
+  }, [localizacoes])
   const produtosFiltrados = useMemo(() => produtos.filter(p =>
-    `${p.nome} ${p.codigo} ${p.descricao}`.toLocaleLowerCase('pt-PT').includes(busca.toLocaleLowerCase('pt-PT').trim())
-  ), [produtos, busca])
-  const codigoNormalizado = codigoLido.trim().toUpperCase()
+    `${p.nome} ${p.codigo} ${p.descricao} ${nomeLocal(p.localizacao_id) ?? ''}`.toLocaleLowerCase('pt-PT').includes(busca.toLocaleLowerCase('pt-PT').trim())
+  ), [produtos, busca, nomeLocal])
+  const totaisStock = useMemo(() => totalPorProduto(saldos), [saldos])
+  const codigoNormalizado = lerCodigo(codigoLido).codigo
   const produtoEncontrado = produtos.find(p => p.codigo === codigoNormalizado)
   const localEncontrada = localizacoes.find(l => l.codigo === codigoNormalizado)
 
@@ -365,8 +385,8 @@ function Dashboard({ session }: { session: Session }) {
     setPagina('leitor')
   }
 
-  function abrirEtiqueta(codigo: string, nome: string, categoria: Selecionada['categoria']) {
-    setEtiqueta({ codigo, nome, categoria })
+  function abrirEtiqueta(codigo: string, nome: string, categoria: Selecionada['categoria'], local?: string) {
+    setEtiqueta({ codigo, nome, categoria, local })
   }
 
   const tituloPagina = menu.find(item => item.id === pagina)?.texto || 'Armazém'
@@ -393,13 +413,13 @@ function Dashboard({ session }: { session: Session }) {
             : !existeAdmin
             ? <div className="empty-panel"><h2>Configuração inicial</h2><p>Ainda não existe nenhum administrador. Como és o primeiro, podes tornar-te administrador geral para criar armazéns e associar utilizadores.</p><button className="btn primary" disabled={ocupado} onClick={() => { void tornarMeAdminGeral() }}><ShieldCheck size={16}/> Tornar-me administrador geral</button></div>
             : <div className="empty-panel"><h2>Ainda não tens acesso a nenhum armazém</h2><p>{convitesRecebidos.length ? 'Aceita um dos convites acima' : 'Pede a um administrador que te associe a um armazém'}. Depois, carrega em atualizar.</p><button className="btn primary" onClick={() => { void inicializar() }}><RefreshCcw size={16}/> Atualizar</button></div>) : <>
-          {pagina === 'inicio' && <Painel produtos={produtos} localizacoes={localizacoes} navegar={navegar}/>}
+          {pagina === 'inicio' && <Painel produtos={produtos} localizacoes={localizacoes} saldos={saldos} navegar={navegar}/>}
           {pagina === 'produtos' && <>
             <div className="page-header"><div><span className="eyebrow">CATÁLOGO</span><h1>Produtos</h1><p>Cria artigos e gera automaticamente os respetivos códigos.</p></div>{podeEditar ? <button className="btn primary" onClick={() => setEdicao(null)}><Plus size={18}/> Novo produto</button> : <span className="role-badge role-consulta">Só consulta</span>}</div>
-            <div className="list-panel"><div className="list-toolbar"><label className="search-bar"><Search size={18}/><input placeholder="Pesquisar por nome ou código…" value={busca} onChange={e => setBusca(e.target.value)}/></label><span className="list-count">{produtosFiltrados.length} produtos</span></div>
+            <div className="list-panel"><div className="list-toolbar"><label className="search-bar"><Search size={18}/><input placeholder="Pesquisar por nome, código ou localização…" value={busca} onChange={e => setBusca(e.target.value)}/></label><span className="list-count">{produtosFiltrados.length} produtos</span></div>
               {produtosFiltrados.length === 0 ? <div className="empty-state"><Package size={30}/><h3>{busca ? 'Nenhum resultado' : 'Ainda não tens produtos'}</h3><p>{busca ? 'Experimenta pesquisar por outro nome ou código.' : 'Cria o primeiro artigo e imprime a tua etiqueta.'}</p>{!busca && podeEditar && <button className="btn primary" onClick={() => setEdicao(null)}><Plus size={17}/> Criar produto</button>}</div> :
-                <div className="items-list">{produtosFiltrados.map(p => <article className="item-row" key={p.id}><span className="item-icon"><Package size={21}/></span><div className="item-main"><div className="item-title"><strong>{p.nome}</strong>{!p.ativo && <span className="small-badge">Inativo</span>}</div><span className="code-tag"><Barcode size={14}/>{p.codigo}</span><small>{p.unidade} · Stock mínimo de referência: {p.stock_minimo}</small></div><div className="item-actions"><button className="btn secondary" onClick={() => abrirEtiqueta(p.codigo, p.nome, 'Produto')}><Printer size={16}/><span>Etiqueta</span></button>{podeEditar && <button className="btn secondary" onClick={() => setEdicao(p)}><Edit3 size={16}/><span>Editar</span></button>}</div></article>)}</div>}
-            </div><p className="micro footnote">A lista apresenta até 1.000 produtos nesta versão. O stock físico só será calculado quando implementarmos os movimentos.</p>
+                <div className="items-list">{produtosFiltrados.map(p => <article className="item-row" key={p.id}><span className="item-icon"><Package size={21}/></span><div className="item-main"><div className="item-title"><strong>{p.nome}</strong>{!p.ativo && <span className="small-badge">Inativo</span>}</div><span className="code-tag"><Barcode size={14}/>{p.codigo}</span>{nomeLocal(p.localizacao_id) ? <span className="loc-chip"><MapPin size={12}/>{nomeLocal(p.localizacao_id)}</span> : <small className="no-loc">Sem localização definida</small>}<small>{p.unidade} · Stock: {qtd(totaisStock.get(p.id) ?? 0)} · Mínimo: {p.stock_minimo}</small></div><div className="item-actions"><button className="btn secondary" onClick={() => abrirEtiqueta(p.codigo, p.nome, 'Produto', nomeLocal(p.localizacao_id))}><Printer size={16}/><span>Etiqueta</span></button>{podeEditar && <button className="btn secondary" onClick={() => setEdicao(p)}><Edit3 size={16}/><span>Editar</span></button>}</div></article>)}</div>}
+            </div><p className="micro footnote">A lista apresenta até 1.000 produtos nesta versão. As quantidades estão em Entradas e saídas.</p>
           </>}
           {pagina === 'localizacoes' && <>
             <div className="page-header"><div><span className="eyebrow">ORGANIZAÇÃO</span><h1>Localizações</h1><p>Cria identificadores para estantes, prateleiras, corredores ou caixas.</p></div>{!podeEditar && <span className="role-badge role-consulta">Só consulta</span>}</div>
@@ -412,21 +432,20 @@ function Dashboard({ session }: { session: Session }) {
               <form className="scan-form" onSubmit={e => { e.preventDefault(); processarCodigo(codigoDigitado) }}><label className="scan-input-wrap"><Barcode size={19}/><input ref={leitorInput} aria-label="Código a identificar" value={codigoDigitado} onChange={e => setCodigoDigitado(e.target.value)} placeholder="Lê um código ou escreve ARM-00000001" autoComplete="off" /></label><button className="btn primary" type="submit">Procurar <ArrowRight size={17}/></button></form>
               <div className="scan-divider"><span>ou</span></div><button className="btn outline scan-camera-button" type="button" onClick={() => setCameraAberta(value => !value)}><Camera size={19}/>{cameraAberta ? 'Fechar câmara' : 'Ler com câmara do telemóvel'}</button>
               {cameraAberta && <BarcodeScanner onRead={processarCodigo} onClose={() => setCameraAberta(false)} />}
-              {codigoLido && <div className="scan-result"><span className="eyebrow">RESULTADO DA LEITURA</span><span className="result-code">{codigoLido}</span>{produtoEncontrado ? <div className="found-card"><div><span className="small-badge green">Produto identificado</span><h3>{produtoEncontrado.nome}</h3><p>{produtoEncontrado.descricao || 'Sem descrição'} · {produtoEncontrado.unidade}</p></div><button className="btn secondary" onClick={() => abrirEtiqueta(produtoEncontrado.codigo, produtoEncontrado.nome, 'Produto')}><Tag size={17}/> Etiqueta</button></div> : localEncontrada ? <div className="found-card"><div><span className="small-badge green">Localização identificada</span><h3>{localEncontrada.nome}</h3><p>Localização do armazém</p></div><button className="btn secondary" onClick={() => abrirEtiqueta(localEncontrada.codigo, localEncontrada.nome, 'Localização')}><Tag size={17}/> Etiqueta</button></div> : <div className="unknown-card"><Info size={20}/><p>Este código ainda não está registado neste armazém. Os códigos internos são criados automaticamente ao adicionar produtos e localizações.</p></div>}</div>}
+              {codigoLido && <div className="scan-result"><span className="eyebrow">RESULTADO DA LEITURA</span><span className="result-code">{codigoLido}</span>{produtoEncontrado ? <div className="found-card"><div><span className="small-badge green">Produto identificado</span><h3>{produtoEncontrado.nome}</h3><p>{nomeLocal(produtoEncontrado.localizacao_id) ? <>Localização: <strong>{nomeLocal(produtoEncontrado.localizacao_id)}</strong> · </> : null}Stock: <strong>{qtd(totalPorProduto(saldos).get(produtoEncontrado.id) ?? 0)} {produtoEncontrado.unidade}</strong></p></div><div className="item-actions">{armazem && podeMovimentar(armazem.papel) && <button className="btn primary" onClick={() => { navegar('stock'); setProdutoMovimentar(produtoEncontrado.id) }}><ArrowRightLeft size={17}/> Movimentar</button>}<button className="btn secondary" onClick={() => abrirEtiqueta(produtoEncontrado.codigo, produtoEncontrado.nome, 'Produto', nomeLocal(produtoEncontrado.localizacao_id))}><Tag size={17}/> Etiqueta</button></div></div> : localEncontrada ? <div className="found-card"><div><span className="small-badge green">Localização identificada</span><h3>{localEncontrada.nome}</h3><p>Localização do armazém</p></div><button className="btn secondary" onClick={() => abrirEtiqueta(localEncontrada.codigo, localEncontrada.nome, 'Localização')}><Tag size={17}/> Etiqueta</button></div> : <div className="unknown-card"><Info size={20}/><p>Este código ainda não está registado neste armazém. Os códigos internos são criados automaticamente ao adicionar produtos e localizações.</p></div>}</div>}
               <p className="micro scan-tip">Dica: os leitores tipo teclado normalmente introduzem o código e enviam Enter. Mantém o campo de pesquisa selecionado.</p>
             </section>
           </>}
           {pagina === 'equipa' && <Equipa key={armazem.id} armazem={armazem} utilizadorId={session.user.id} adminGeral={adminGeral} onAlterado={() => { void recarregarAcessos() }}/>}
-          {pagina === 'stock' && <>
-            <div className="page-header"><div><span className="eyebrow">PRÓXIMA ETAPA</span><h1>Entradas e saídas</h1><p>As tabelas de stock e movimentos já estão preparadas na base de dados.</p></div></div><div className="future-panel"><span className="future-icon"><ArrowRightLeft size={32}/></span><h2>Movimentos na fase 2</h2><p>Vamos adicionar entradas, saídas, transferências entre localizações e histórico. Os movimentos serão executados por operações SQL transacionais, com validação de saldo e registo do utilizador.</p><div className="future-row"><span><ArrowDownToLine size={18}/> Entradas</span><span><ArrowUpFromLine size={18}/> Saídas</span><span><ArrowRightLeft size={18}/> Transferências</span></div><button className="btn secondary" onClick={() => navegar('produtos')}>Voltar aos produtos</button></div>
-          </>}
+          {pagina === 'stock' && <Movimentos key={`${armazem.id}:${produtoMovimentar ?? ''}`} armazem={armazem} produtos={produtos} localizacoes={localizacoes} saldos={saldos} produtoInicial={produtoMovimentar} onRecarregar={() => carregarListas(armazem.id)}/>}
+          {pagina === 'obras' && <FolhaObra key={armazem.id} armazem={armazem} produtos={produtos} localizacoes={localizacoes} saldos={saldos} autor={session.user.email || 'utilizador'}/>}
           {pagina === 'inventarios' && <>
             <div className="page-header"><div><span className="eyebrow">PRÓXIMA ETAPA</span><h1>Inventários</h1><p>As tabelas de sessões de inventário e contagens já estão criadas.</p></div></div><div className="future-panel"><span className="future-icon"><ClipboardCheck size={32}/></span><h2>Contagem física na fase 3</h2><p>Vamos poder abrir um inventário, ler a etiqueta de cada artigo e localização, contar as unidades e comparar com os saldos. Os ajustes exigirão confirmação.</p><button className="btn secondary" onClick={() => navegar('leitor')}>Testar leitura de códigos</button></div>
           </>}
         </>}
       </div>
     </main>
-    {edicao !== undefined && <ProdutoModal inicial={edicao} onClose={() => setEdicao(undefined)} onSave={guardarProduto} ocupado={ocupado}/>}
+    {edicao !== undefined && <ProdutoModal inicial={edicao} localizacoes={localizacoes} onClose={() => setEdicao(undefined)} onSave={guardarProduto} ocupado={ocupado}/>}
     {etiqueta && <Etiqueta {...etiqueta} onClose={() => setEtiqueta(null)}/>}
   </div>
 }

@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { CheckCircle2, Info, Link2, LogOut, Mail, Save, Trash2, UserPlus, Users, X } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { mensagemErro } from '../lib/erros'
 import { listaPapeis, papeis } from '../lib/permissoes'
 import type { ArmazemAcesso, ConviteEnviado, ConviteRecebido, Membro, Papel, UtilizadorRegistado } from '../lib/types'
 
@@ -55,7 +56,7 @@ export default function Equipa({ armazem, utilizadorId, adminGeral, onAlterado }
       if (u.error) throw u.error
       setRegistados((u.data || []) as UtilizadorRegistado[])
     } catch (e) {
-      setErro(e instanceof Error ? e.message : 'Não foi possível carregar os utilizadores.')
+      setErro(mensagemErro(e, 'Não foi possível carregar os utilizadores.'))
     }
   }, [armazem.id, eAdmin, adminGeral])
 
@@ -72,7 +73,7 @@ export default function Equipa({ armazem, utilizadorId, adminGeral, onAlterado }
       setAviso(sucesso)
       return true
     } catch (e) {
-      setErro(e instanceof Error ? e.message : 'Não foi possível concluir a operação.')
+      setErro(mensagemErro(e, 'Não foi possível concluir a operação.'))
       return false
     } finally { setOcupado(false) }
   }

@@ -1,4 +1,4 @@
-# Armazém — MVP, fase 1
+# Armazém — MVP, fase 2
 
 Aplicação em **português de Portugal**, construída com React, TypeScript, Vite e Supabase.
 
@@ -16,9 +16,20 @@ Aplicação em **português de Portugal**, construída com React, TypeScript, Vi
 - **Utilizadores e permissões:** o administrador convida pessoas por email e escolhe a permissão de cada uma (Administrador, Operador ou Consulta). Quem pertence a vários armazéns troca de armazém no menu lateral.
 - Interface responsiva e manifesto web para utilização em dispositivos móveis.
 
+## O que já funciona (fase 2)
+
+- **Entradas, saídas e transferências** entre localizações, no menu **Entradas e saídas**.
+- Produto e localizações podem ser escolhidos na lista ou **lidos pelo código** (câmara ou leitor HID): um código `ARM-` escolhe o produto e um `LOC-` preenche a origem/destino conforme o tipo de operação.
+- Todos os movimentos passam pela função `registar_movimento` (`004_movimentos.sql`), que numa só transação valida a permissão, o produto, as localizações, a quantidade e o **saldo disponível** (o stock nunca fica negativo), atualiza `stock_saldos` e grava o movimento.
+- Produtos em `un`/`cx` só aceitam quantidades inteiras; os restantes aceitam até 3 casas decimais. Produtos inativos não recebem entradas, mas podem sair.
+- **Histórico imutável**: um *trigger* impede alterar ou apagar movimentos, mesmo fora da aplicação. Cada movimento guarda quem o fez e quando.
+- Cada produto pode ter uma **localização habitual** (onde costuma estar arrumado). Aparece na lista de produtos, no leitor e na etiqueta, e é sugerida como destino nas entradas e como origem nas saídas.
+- **Folhas de obra**: escolhe produtos e quantidades para uma obra e imprime uma folha A4 com, por linha, o nome, a localização onde está o stock, a quantidade, o código de barras e um QR. O QR contém `ARM-…|quantidade|obra`: ao lê-lo em **Entradas e saídas**, a saída fica preenchida (produto, quantidade, origem e observação «Obra: …») e basta confirmar. O código de barras da folha contém só o código do produto, para funcionar com qualquer leitor HID. Imprimir não altera o stock.
+- **Stock atual** por produto e por localização, com aviso de produtos abaixo do stock mínimo. O painel inicial e o leitor de códigos mostram as quantidades.
+
 ### O que ainda não funciona
 
-A base de dados **já contém a estrutura** para `stock_saldos`, `movimentos`, `inventarios` e `contagens_inventario`, mas ainda não existe lógica para entradas, saídas, transferências, contagem física ou relatórios. As tabelas futuras têm **apenas acesso de leitura** para a aplicação: serão escritas por funções transacionais com validações numa etapa posterior. Isto evita apresentar stock inventado ou escrever dados de forma insegura.
+Ainda não existe lógica para inventários (contagem física), ajustes de stock nem relatórios. As tabelas `inventarios` e `contagens_inventario` têm **apenas acesso de leitura** para a aplicação.
 
 A aplicação ainda **não funciona offline**. O manifesto não inclui cache/service worker: a instalação PWA poderá depender do navegador e as funcionalidades offline serão tratadas numa fase posterior. O catálogo lê até 1.000 registos de cada tipo nesta fase.
 
@@ -33,7 +44,7 @@ A aplicação ainda **não funciona offline**. O manifesto não inclui cache/ser
 
 1. Em https://supabase.com/dashboard, cria um novo projeto.
 2. Na secção **SQL Editor**, abre `supabase/migrations/001_init.sql`, copia todo o conteúdo e executa-o **uma única vez num projeto novo**.
-3. Ainda no **SQL Editor**, executa `supabase/migrations/002_permissoes.sql` (utilizadores e permissões) e depois `supabase/migrations/003_armazens_partilhados.sql` (armazéns partilhados e administrador geral). Se o projeto já tinha dados, quem criou o armazém mais antigo passa a administrador geral.
+3. Ainda no **SQL Editor**, executa `supabase/migrations/002_permissoes.sql` (utilizadores e permissões) depois `supabase/migrations/003_armazens_partilhados.sql` (armazéns partilhados e administrador geral) depois `supabase/migrations/004_movimentos.sql` (entradas, saídas e transferências) e por fim `supabase/migrations/005_localizacao_produto.sql` (localização habitual do produto). Se o projeto já tinha dados, quem criou o armazém mais antigo passa a administrador geral.
 4. Em **Authentication > Providers**, confirma que o início de sessão por email está ativo e **mantém a confirmação de email ligada**: os convites só aparecem a quem confirmou o email, para ninguém aceitar um convite com um email que não é seu.
 5. Em **Connect** ou **Project Settings > API**, copia o `Project URL` e a **publishable key** do projeto. Uma `anon` key antiga também pode ser usada como chave pública, mas nunca uma `service_role` ou `secret key`.
 
@@ -83,8 +94,8 @@ As contas **não têm armazém próprio**: todos trabalham nos armazéns da empr
 |---|---|
 | **Administrador geral** | Tudo em todos os armazéns: criar armazéns, associar contas registadas e nomear outros administradores gerais. |
 | **Administrador** | Tudo: produtos, localizações, convidar utilizadores, alterar permissões, remover acessos e mudar o nome do armazém. |
-| **Operador** | Criar e editar produtos e localizações. |
-| **Consulta** | Ver o catálogo, ler códigos e imprimir etiquetas. Não altera nada. |
+| **Operador** | Criar e editar produtos e localizações; registar entradas, saídas e transferências. |
+| **Consulta** | Ver o catálogo, o stock e o histórico, ler códigos e imprimir etiquetas. Não altera nada. |
 
 1. **Primeira vez (projeto vazio):** o primeiro utilizador a entrar vê **Configuração inicial** e carrega em **Tornar-me administrador geral**. Este botão deixa de funcionar quando já existe um administrador geral.
 2. Em **Armazéns**, cria um armazém. A app abre logo a página **Utilizadores** desse armazém.
@@ -119,6 +130,8 @@ armazem-mvp/
 │   │   ├── Administracao.tsx     # armazéns e administradores gerais
 │   │   ├── BarcodeScanner.tsx    # ZXing: Code 128 e QR Code por câmara
 │   │   ├── Equipa.tsx            # utilizadores, permissões e convites
+│   │   ├── FolhaObra.tsx         # folhas de obra para impressão e picking
+│   │   ├── Movimentos.tsx        # entradas, saídas, transferências, stock e histórico
 │   │   └── Etiqueta.tsx          # geração Code 128 e QR, impressão
 │   ├── lib/
 │   │   ├── permissoes.ts        # nomes e descrições das permissões
@@ -131,7 +144,9 @@ armazem-mvp/
 ├── supabase/migrations/
 │   ├── 001_init.sql             # tabelas, índices, grants e RLS
 │   ├── 002_permissoes.sql       # membros, convites e permissões
-│   └── 003_armazens_partilhados.sql # administrador geral e armazéns partilhados
+│   ├── 003_armazens_partilhados.sql # administrador geral e armazéns partilhados
+│   ├── 004_movimentos.sql       # movimentos transacionais e histórico imutável
+│   └── 005_localizacao_produto.sql # localização habitual do produto
 ├── .env.example
 ├── package.json
 └── README.md
@@ -139,7 +154,7 @@ armazem-mvp/
 
 ## Próximas etapas, pela ordem recomendada
 
-1. **Fase 2:** funções RPC transacionais para entradas, saídas e transferências, validação de stock não negativo, histórico imutável e ecrãs de operações.
+1. ~~**Fase 2:** entradas, saídas e transferências~~ — feito.
 2. **Fase 3:** abertura e fecho de inventários, contagens por localização e ajustes validados.
 3. **Fase 4:** relatórios e exportação (utilizadores, convites e permissões já estão feitos).
 4. **Fase 5:** sincronização offline, serviço PWA mais completo e modelos de etiquetas para impressoras específicas.
@@ -149,7 +164,7 @@ armazem-mvp/
 - Só administradores gerais (`administradores_gerais`) criam armazéns. O acesso aos restantes é decidido pela tabela `membros_armazem`.
 - Membros e convites só mudam através de funções SQL que verificam a permissão de quem as chama; o cliente não tem escrita direta nessas tabelas.
 - Os clientes só podem criar/editar colunas necessárias em produtos e localizações. **O código é gerado no PostgreSQL** e não pode ser alterado via API com as permissões de utilizador.
-- Não há permissões para apagar registos nem para alterar quantidades de stock diretamente.
+- Não há permissões para apagar registos nem para alterar quantidades de stock diretamente: o stock só muda através de `registar_movimento`.
 - É necessário testar as políticas RLS antes de dar acesso a dados reais; a migração não substitui testes de integração com duas contas distintas.
 - O texto lido por leitores é tratado como identificador de consulta, nunca como comando.
 

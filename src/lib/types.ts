@@ -14,6 +14,7 @@ export interface Produto {
   unidade: string
   stock_minimo: number
   ativo: boolean
+  localizacao_id: string | null
   criado_em: string
 }
 
@@ -25,7 +26,7 @@ export interface Localizacao {
   criado_em: string
 }
 
-export type ProdutoFormulario = Pick<Produto, 'nome' | 'descricao' | 'unidade' | 'stock_minimo' | 'ativo'>
+export type ProdutoFormulario = Pick<Produto, 'nome' | 'descricao' | 'unidade' | 'stock_minimo' | 'ativo' | 'localizacao_id'>
 
 export type Papel = 'administrador' | 'operador' | 'consulta'
 
@@ -62,4 +63,28 @@ export interface UtilizadorRegistado {
   email: string
   criado_em: string
   admin_geral: boolean
+}
+
+export type TipoMovimento = 'entrada' | 'saida' | 'transferencia' | 'ajuste'
+
+export interface StockSaldo {
+  armazem_id: string
+  produto_id: string
+  localizacao_id: string
+  quantidade: number
+  atualizado_em: string
+}
+
+export interface Movimento {
+  id: string
+  armazem_id: string
+  produto_id: string
+  tipo: TipoMovimento
+  quantidade: number
+  origem_id: string | null
+  destino_id: string | null
+  observacao: string
+  efetuado_por: string
+  efetuado_por_email: string
+  criado_em: string
 }

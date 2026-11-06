@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import type { FormEvent } from 'react'
 import { ArrowRight, CheckCircle2, Info, Plus, ShieldCheck, Users, Warehouse, X } from 'lucide-react'
 import { supabase } from '../lib/supabase'
+import { mensagemErro } from '../lib/erros'
 import type { ArmazemAcesso, UtilizadorRegistado } from '../lib/types'
 
 export default function Administracao({ armazens, utilizadorId, onCriado, onAbrir }: {
@@ -29,7 +30,7 @@ export default function Administracao({ armazens, utilizadorId, onCriado, onAbri
       setUtilizadores((u.data || []) as UtilizadorRegistado[])
       setMembros((m.data || []) as { armazem_id: string; utilizador_id: string }[])
     } catch (e) {
-      setErro(e instanceof Error ? e.message : 'Não foi possível carregar os utilizadores.')
+      setErro(mensagemErro(e, 'Não foi possível carregar os utilizadores.'))
     }
   }, [])
 
@@ -47,7 +48,7 @@ export default function Administracao({ armazens, utilizadorId, onCriado, onAbri
       setNome('')
       await onCriado((data as { id: string }).id)
     } catch (e) {
-      setErro(e instanceof Error ? e.message : 'Não foi possível criar o armazém.')
+      setErro(mensagemErro(e, 'Não foi possível criar o armazém.'))
     } finally { setOcupado(false) }
   }
 
@@ -63,7 +64,7 @@ export default function Administracao({ armazens, utilizadorId, onCriado, onAbri
       await carregar()
       setAviso(ativo ? `${u.email} é agora administrador geral.` : `${u.email} deixou de ser administrador geral.`)
     } catch (e) {
-      setErro(e instanceof Error ? e.message : 'Não foi possível alterar o administrador geral.')
+      setErro(mensagemErro(e, 'Não foi possível alterar o administrador geral.'))
     } finally { setOcupado(false) }
   }
 
