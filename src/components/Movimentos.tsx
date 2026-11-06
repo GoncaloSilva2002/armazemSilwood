@@ -246,7 +246,7 @@ export default function Movimentos({ armazem, produtos, localizacoes, saldos, pr
         <div className="list-toolbar"><h2>{produto ? `Stock de ${produto.nome}` : 'Stock por localização'}</h2></div>
         {!produto ? <div className="empty-state compact"><Package size={29}/><h3>Escolhe um produto</h3><p>Lê a etiqueta do produto ou escolhe-o na lista para ver onde está guardado.</p></div>
           : !saldosProduto.length ? <div className="empty-state compact"><Boxes size={29}/><h3>Sem stock</h3><p>Este produto ainda não tem quantidades em nenhuma localização.</p></div>
-          : <div className="items-list">{saldosProduto.map(s => <article key={s.localizacao_id} className={`item-row selectable ${origemId === s.localizacao_id ? 'selected' : ''}`} onClick={() => { if (precisaOrigem) setOrigemId(s.localizacao_id) }}><span className="item-icon"><MapPin size={20}/></span><div className="item-main"><strong>{nomeLocal(s.localizacao_id)}</strong><span className="code-tag">{localPorId.get(s.localizacao_id)?.codigo}</span></div><strong className="qty-big">{qtd(s.quantidade)} <small>{produto.unidade}</small></strong></article>)}</div>}
+          : <div className="items-list">{saldosProduto.map(s => <article key={s.localizacao_id} className={`item-row selectable ${origemId === s.localizacao_id ? 'selected' : ''}`} {...(precisaOrigem ? { role: 'button', tabIndex: 0, 'aria-pressed': origemId === s.localizacao_id, onKeyDown: (e: React.KeyboardEvent) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOrigemId(s.localizacao_id) } } } : {})} onClick={() => { if (precisaOrigem) setOrigemId(s.localizacao_id) }}><span className="item-icon"><MapPin size={20}/></span><div className="item-main"><strong>{nomeLocal(s.localizacao_id)}</strong><span className="code-tag">{localPorId.get(s.localizacao_id)?.codigo}</span></div><strong className="qty-big">{qtd(s.quantidade)} <small>{produto.unidade}</small></strong></article>)}</div>}
       </section>
     </div>}
 
@@ -271,13 +271,13 @@ export default function Movimentos({ armazem, produtos, localizacoes, saldos, pr
         : <div className="items-list">{historico.map(m => {
           const T = tipos[m.tipo].icon
           const p = produtoPorId.get(m.produto_id)
-          const sinal = m.tipo === 'entrada' ? '+' : m.tipo === 'saida' ? '−' : ''
+          const sinal = m.tipo === 'entrada' || (m.tipo === 'ajuste' && m.destino_id) ? '+' : m.tipo === 'saida' || (m.tipo === 'ajuste' && m.origem_id) ? '−' : ''
           return <article key={m.id} className="item-row"><span className={`item-icon mov-${m.tipo}`}><T size={20}/></span>
             <div className="item-main"><div className="item-title"><strong>{p?.nome ?? 'Produto removido'}</strong><span className={`small-badge mov-badge-${m.tipo}`}>{tipos[m.tipo].nome}</span></div>
               <small>{m.origem_id && nomeLocal(m.origem_id)}{m.origem_id && m.destino_id && ' → '}{m.destino_id && nomeLocal(m.destino_id)} · {formatoData.format(new Date(m.criado_em))} · {m.efetuado_por_email || 'utilizador'}</small>
               {m.observacao && <small className="mov-obs">{m.observacao}</small>}
             </div>
-            <strong className={`qty-big mov-qty-${m.tipo}`}>{sinal}{qtd(m.quantidade)} <small>{p?.unidade}</small></strong>
+            <strong className={`qty-big mov-qty-${m.tipo === 'ajuste' ? (m.destino_id ? 'entrada' : 'saida') : m.tipo}`}>{sinal}{qtd(m.quantidade)} <small>{p?.unidade}</small></strong>
           </article>
         })}</div>}
       {historico.length === 200 && <p className="micro footnote" style={{ padding: '0 23px 16px' }}>A mostrar os 200 movimentos mais recentes. Filtra por produto para ver mais antigos.</p>}

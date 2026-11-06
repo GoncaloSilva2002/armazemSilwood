@@ -18,6 +18,7 @@ import Equipa, { ConvitesRecebidos } from './components/Equipa'
 import Administracao from './components/Administracao'
 import Movimentos, { qtd, totalPorProduto } from './components/Movimentos'
 import FolhaObra from './components/FolhaObra'
+import Inventarios from './components/Inventarios'
 import { lerCodigo } from './lib/codigos'
 
 type Pagina = 'inicio' | 'produtos' | 'localizacoes' | 'leitor' | 'equipa' | 'admin' | 'stock' | 'obras' | 'inventarios'
@@ -33,7 +34,7 @@ const menu: { id: Pagina; texto: string; icon: LucideIcon; fase?: boolean; soAdm
   { id: 'admin', texto: 'Armazéns', icon: Building2, soAdminGeral: true },
   { id: 'stock', texto: 'Entradas e saídas', icon: ArrowRightLeft },
   { id: 'obras', texto: 'Folhas de obra', icon: ClipboardList },
-  { id: 'inventarios', texto: 'Inventários', icon: ClipboardCheck, fase: true }
+  { id: 'inventarios', texto: 'Inventários', icon: ClipboardCheck }
 ]
 
 const formularioVazio: ProdutoFormulario = {
@@ -56,7 +57,7 @@ function TextoConfiguracao() {
   return (
     <div className="full-page">
       <div className="auth-card setup-card">
-        <div className="brand-mark"><Warehouse size={29} /></div>
+        <img className="brand-logo" src="/silwood-logo.png" alt="Silwood — Mobiliário e Carpintaria"/>
         <span className="eyebrow">PRIMEIRA INSTALAÇÃO</span>
         <h1>Configurar o Supabase</h1>
         <p>Os ficheiros da aplicação estão prontos. Para guardar produtos numa base de dados, precisas de associar o teu projeto Supabase.</p>
@@ -102,7 +103,7 @@ function Autenticacao() {
   return (
     <div className="full-page">
       <div className="auth-card">
-        <div className="brand-mark"><Warehouse size={29} /></div>
+        <img className="brand-logo" src="/silwood-logo.png" alt="Silwood — Mobiliário e Carpintaria"/>
         <span className="eyebrow">GESTÃO DE ARMAZÉM</span>
         <h1>{registo ? 'Criar conta' : 'Bem-vindo de volta'}</h1>
         <p>{registo ? 'Cria uma conta para guardar o teu armazém em segurança.' : 'Entra na tua conta para gerir os produtos e etiquetas.'}</p>
@@ -180,7 +181,7 @@ function Painel({ produtos, localizacoes, saldos, navegar }: { produtos: Produto
       <button className="quick-card" onClick={() => navegar('leitor')}><span className="quick-icon"><ScanLine size={22}/></span><strong>Ler um código</strong><p>Telemóvel ou leitor USB/Bluetooth</p><ArrowRight size={18}/></button>
       <button className="quick-card" onClick={() => navegar('stock')}><span className="quick-icon"><ArrowRightLeft size={22}/></span><strong>Entradas e saídas</strong><p>Registar movimentos e ver o stock</p><ArrowRight size={18}/></button>
     </div>
-    <div className="helper-box"><Info size={20}/><p><strong>Fase 2 ativa.</strong> Além do catálogo e das etiquetas, já podes registar entradas, saídas e transferências entre localizações. Os inventários (contagem física) chegam na fase seguinte.</p></div>
+    <div className="helper-box"><Info size={20}/><p><strong>Fase 3 ativa.</strong> Além do catálogo, etiquetas e movimentos, já podes fazer inventários: contar por localização e validar os ajustes ao stock.</p></div>
   </>
 }
 
@@ -393,7 +394,7 @@ function Dashboard({ session }: { session: Session }) {
 
   return <div className="app-shell">
     <aside className={`sidebar ${mobileMenu ? 'sidebar-open' : ''}`}>
-      <div className="side-brand"><span className="side-brand-icon"><Warehouse size={24}/></span><div><strong>ARMAZÉM</strong><small>Gestão inteligente</small></div><button className="icon-btn mobile-only" onClick={() => setMobileMenu(false)}><X size={19}/></button></div>
+      <div className="side-brand"><img className="side-logo" src="/silwood-logo.png" alt="Silwood — Mobiliário e Carpintaria"/><small>Gestão de armazém</small><button className="icon-btn mobile-only" onClick={() => setMobileMenu(false)}><X size={19}/></button></div>
       {acessos.length > 1 && <label className="warehouse-switch"><span className="side-label">ARMAZÉM</span><select value={armazemId ?? ''} onChange={e => selecionarArmazem(e.target.value)}>{acessos.map(a => <option key={a.id} value={a.id}>{a.nome}</option>)}</select></label>}
       <div className="side-label">ESPAÇO DE TRABALHO</div>
       <nav className="side-nav" aria-label="Navegação principal">{menu.filter(item => !item.soAdminGeral || adminGeral).map(item => <button key={item.id} type="button" className={`side-link ${pagina === item.id ? 'active' : ''}`} onClick={() => navegar(item.id)}><item.icon size={19}/><span>{item.texto}</span>{item.fase && <span className="phase-dot" title="Próxima fase"/>}</button>)}</nav>
@@ -439,9 +440,7 @@ function Dashboard({ session }: { session: Session }) {
           {pagina === 'equipa' && <Equipa key={armazem.id} armazem={armazem} utilizadorId={session.user.id} adminGeral={adminGeral} onAlterado={() => { void recarregarAcessos() }}/>}
           {pagina === 'stock' && <Movimentos key={`${armazem.id}:${produtoMovimentar ?? ''}`} armazem={armazem} produtos={produtos} localizacoes={localizacoes} saldos={saldos} produtoInicial={produtoMovimentar} onRecarregar={() => carregarListas(armazem.id)}/>}
           {pagina === 'obras' && <FolhaObra key={armazem.id} armazem={armazem} produtos={produtos} localizacoes={localizacoes} saldos={saldos} autor={session.user.email || 'utilizador'}/>}
-          {pagina === 'inventarios' && <>
-            <div className="page-header"><div><span className="eyebrow">PRÓXIMA ETAPA</span><h1>Inventários</h1><p>As tabelas de sessões de inventário e contagens já estão criadas.</p></div></div><div className="future-panel"><span className="future-icon"><ClipboardCheck size={32}/></span><h2>Contagem física na fase 3</h2><p>Vamos poder abrir um inventário, ler a etiqueta de cada artigo e localização, contar as unidades e comparar com os saldos. Os ajustes exigirão confirmação.</p><button className="btn secondary" onClick={() => navegar('leitor')}>Testar leitura de códigos</button></div>
-          </>}
+          {pagina === 'inventarios' && <Inventarios key={armazem.id} armazem={armazem} produtos={produtos} localizacoes={localizacoes} saldos={saldos} onRecarregar={() => carregarListas(armazem.id)}/>}
         </>}
       </div>
     </main>

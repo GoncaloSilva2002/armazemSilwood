@@ -88,3 +88,32 @@ export interface Movimento {
   efetuado_por_email: string
   criado_em: string
 }
+
+export type EstadoInventario = 'aberto' | 'fechado' | 'cancelado'
+
+export interface Inventario {
+  id: string
+  armazem_id: string
+  titulo: string
+  estado: EstadoInventario
+  localizacao_id: string | null
+  observacao: string
+  criado_por_email: string
+  criado_em: string
+  fechado_em: string | null
+  fechado_por_email: string
+  ajustes_aplicados: number
+}
+
+export interface Contagem {
+  id: string
+  inventario_id: string
+  produto_id: string
+  localizacao_id: string
+  quantidade_contada: number
+  quantidade_sistema: number | null
+  diferenca: number | null
+  nao_contado: boolean
+  contado_por_email: string
+  contado_em: string
+}

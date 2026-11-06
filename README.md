@@ -44,7 +44,7 @@ A aplicação ainda **não funciona offline**. O manifesto não inclui cache/ser
 
 1. Em https://supabase.com/dashboard, cria um novo projeto.
 2. Na secção **SQL Editor**, abre `supabase/migrations/001_init.sql`, copia todo o conteúdo e executa-o **uma única vez num projeto novo**.
-3. Ainda no **SQL Editor**, executa `supabase/migrations/002_permissoes.sql` (utilizadores e permissões) depois `supabase/migrations/003_armazens_partilhados.sql` (armazéns partilhados e administrador geral) depois `supabase/migrations/004_movimentos.sql` (entradas, saídas e transferências) e por fim `supabase/migrations/005_localizacao_produto.sql` (localização habitual do produto). Se o projeto já tinha dados, quem criou o armazém mais antigo passa a administrador geral.
+3. Ainda no **SQL Editor**, executa `supabase/migrations/002_permissoes.sql` (utilizadores e permissões) depois `supabase/migrations/003_armazens_partilhados.sql` (armazéns partilhados e administrador geral) depois `supabase/migrations/004_movimentos.sql` (entradas, saídas e transferências) depois `supabase/migrations/005_localizacao_produto.sql` (localização habitual do produto) e por fim `supabase/migrations/006_inventarios.sql` (inventários e ajustes). Se o projeto já tinha dados, quem criou o armazém mais antigo passa a administrador geral.
 4. Em **Authentication > Providers**, confirma que o início de sessão por email está ativo e **mantém a confirmação de email ligada**: os convites só aparecem a quem confirmou o email, para ninguém aceitar um convite com um email que não é seu.
 5. Em **Connect** ou **Project Settings > API**, copia o `Project URL` e a **publishable key** do projeto. Uma `anon` key antiga também pode ser usada como chave pública, mas nunca uma `service_role` ou `secret key`.
 
@@ -131,6 +131,7 @@ armazem-mvp/
 │   │   ├── BarcodeScanner.tsx    # ZXing: Code 128 e QR Code por câmara
 │   │   ├── Equipa.tsx            # utilizadores, permissões e convites
 │   │   ├── FolhaObra.tsx         # folhas de obra para impressão e picking
+│   │   ├── Inventarios.tsx       # inventários: contagem por localização e validação de ajustes
 │   │   ├── Movimentos.tsx        # entradas, saídas, transferências, stock e histórico
 │   │   └── Etiqueta.tsx          # geração Code 128 e QR, impressão
 │   ├── lib/
@@ -146,7 +147,8 @@ armazem-mvp/
 │   ├── 002_permissoes.sql       # membros, convites e permissões
 │   ├── 003_armazens_partilhados.sql # administrador geral e armazéns partilhados
 │   ├── 004_movimentos.sql       # movimentos transacionais e histórico imutável
-│   └── 005_localizacao_produto.sql # localização habitual do produto
+│   ├── 005_localizacao_produto.sql # localização habitual do produto
+│   └── 006_inventarios.sql      # inventários, contagens e ajustes validados
 ├── .env.example
 ├── package.json
 └── README.md
@@ -155,7 +157,7 @@ armazem-mvp/
 ## Próximas etapas, pela ordem recomendada
 
 1. ~~**Fase 2:** entradas, saídas e transferências~~ — feito.
-2. **Fase 3:** abertura e fecho de inventários, contagens por localização e ajustes validados.
+2. ~~**Fase 3:** abertura e fecho de inventários, contagens por localização e ajustes validados~~ — feito (executar `006_inventarios.sql`).
 3. **Fase 4:** relatórios e exportação (utilizadores, convites e permissões já estão feitos).
 4. **Fase 5:** sincronização offline, serviço PWA mais completo e modelos de etiquetas para impressoras específicas.
 
@@ -164,7 +166,8 @@ armazem-mvp/
 - Só administradores gerais (`administradores_gerais`) criam armazéns. O acesso aos restantes é decidido pela tabela `membros_armazem`.
 - Membros e convites só mudam através de funções SQL que verificam a permissão de quem as chama; o cliente não tem escrita direta nessas tabelas.
 - Os clientes só podem criar/editar colunas necessárias em produtos e localizações. **O código é gerado no PostgreSQL** e não pode ser alterado via API com as permissões de utilizador.
-- Não há permissões para apagar registos nem para alterar quantidades de stock diretamente: o stock só muda através de `registar_movimento`.
+- Não há permissões para apagar registos nem para alterar quantidades de stock diretamente: o stock só muda através de `registar_movimento` ou, nos inventários, de `fechar_inventario` (só administradores), que regista cada diferença como movimento `ajuste`.
+- Inventários fechados ou cancelados e as respetivas contagens ficam imutáveis (trigger `contagens_imutaveis`).
 - É necessário testar as políticas RLS antes de dar acesso a dados reais; a migração não substitui testes de integração com duas contas distintas.
 - O texto lido por leitores é tratado como identificador de consulta, nunca como comando.
 
